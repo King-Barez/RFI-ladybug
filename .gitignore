@@ -1,0 +1,46 @@
+# filepath: /usr/src/ladybug/src/ladybugRFI/.gitignore
+# Build artifacts
+/build/
+/CMakeFiles/
+/CMakeCache.txt
+/Makefile
+/compile_commands.json
+*.o
+*.a
+*.so
+
+# Runtime outputs
+/imgs/
+/rx_previews/
+/*.bmp
+/*.png
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Logs and dumps
+*.log
+core
+core.*
+
+# Python virtual envs and configs
+.venv/
+.env
+.python-version
+
+# Editors/IDEs
+.vscode/
+.idea/
+.vs/
+
+# OS files
+.DS_Store
+
+# Editors
+.vscode/
+# Installers
+miniconda.sh
+Miniconda3-*.sh
+*.run
+*.bin
