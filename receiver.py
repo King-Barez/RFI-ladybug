@@ -4,76 +4,107 @@ import struct
 import argparse
 import os
 import time
-import numpy as np
 
 try:
     from PIL import Image
+    import numpy as np
 except ImportError:
     Image = None
+    np = None
 
 MAGIC = b"LDB0"
 HDR_SIZE = 4 + 4 * 6  # magic + 6 x uint32 big-endian
 
-def recv_all(conn, n):
-    buf = bytearray()
-    while len(buf) < n:
-        chunk = conn.recv(n - len(buf))
-        if not chunk:
+def recv_into_all(conn, mv):
+    view = mv
+    total = 0
+    while total < len(mv):
+        n = conn.recv_into(view, len(mv) - total)
+        if n == 0:
             raise ConnectionError("connessione chiusa")
-        buf.extend(chunk)
-    return bytes(buf)
+        total += n
+        view = view[n:]
 
-def save_png_bgru(path, rows, cols, raw):
-    if Image is None:
+def save_png_bgr(path, rows, cols, raw):
+    if Image is None or np is None:
         return
-    arr = np.frombuffer(raw, dtype=np.uint8).reshape(rows, cols, 4)
-    rgba = arr[:, :, [2, 1, 0, 3]].copy()
-    im = Image.fromarray(rgba)
-    im.save(path)
+    arr = np.frombuffer(raw, dtype=np.uint8).reshape(rows, cols, 3)  # B,G,R
+    rgb = arr[:, :, [2, 1, 0]].copy()
+    # fastest PNG (no compression)
+    Image.fromarray(rgb).save(path, compress_level=0, optimize=False)
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=5000)
-    ap.add_argument("--save-dir", default="rx_previews", help="salva tutte le immagini ricevute")
+    ap.add_argument("--save-dir", default=None, help="dir per salvare (disabilitato se omesso)")
+    ap.add_argument("--save-every", type=int, default=0, help="salva 1 frame ogni N (0=mai)")
     args = ap.parse_args()
 
-    os.makedirs(args.save_dir, exist_ok=True)
+    if args.save_dir:
+        os.makedirs(args.save_dir, exist_ok=True)
 
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)
     s.bind((args.host, args.port))
     s.listen(1)
     print(f"Ascolto su {args.host}:{args.port}…")
 
-    seq = 0  # progressive numbering across reconnects
+    seq = 0
     while True:
         conn, addr = s.accept()
+        conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         print("Connesso da", addr)
-        last_t = time.time()
+        bufs = []
+        last_t = time.perf_counter()
         frames = 0
+        payload_ms_sum = 0.0
+        save_ms_sum = 0.0
+        bytes_sum = 0
+        prev_frame = None
         try:
             while True:
-                hdr = recv_all(conn, HDR_SIZE)
-                if hdr[:4] != MAGIC:
-                    raise RuntimeError(f"Magic errato: {hdr[:4]}")
+                t0 = time.perf_counter()
+                hdr = conn.recv(HDR_SIZE, socket.MSG_WAITALL)
+                if len(hdr) != HDR_SIZE or hdr[:4] != MAGIC:
+                    raise ConnectionError("header/magic non valido")
                 version, frame, rows, cols, bpp, numCams = struct.unpack("!6I", hdr[4:])
                 payload_sz = rows * cols * bpp
-                cams = [recv_all(conn, payload_sz) for _ in range(numCams)]
+
+                if not bufs or len(bufs) != numCams or len(bufs[0]) != payload_sz:
+                    bufs = [bytearray(payload_sz) for _ in range(numCams)]
+
+                tp0 = time.perf_counter()
+                for i in range(numCams):
+                    recv_into_all(conn, memoryview(bufs[i]))
+                tp1 = time.perf_counter()
+                payload_ms_sum += (tp1 - tp0) * 1000.0
+                bytes_sum += payload_sz * numCams
 
                 frames += 1
-                now = time.time()
+                now = time.perf_counter()
                 if now - last_t >= 1.0:
-                    fps = frames / (now - last_t)
-                    print(f"RX frame={frame} {rows}x{cols} bpp={bpp} cams={numCams} ~{fps:.1f} fps")
+                    dt = now - last_t
+                    fps = frames / dt
+                    avg_payload = (payload_ms_sum / frames) if frames else 0.0
+                    avg_save = (save_ms_sum / frames) if (frames and save_ms_sum > 0) else 0.0
+                    mb_s = (bytes_sum / (1024.0 * 1024.0)) / dt
+                    print(f"RX: fps={fps:.1f} payload={avg_payload:.2f} ms save={avg_save:.2f} ms bw={mb_s:.1f} MiB/s (frame={frame} {rows}x{cols} bpp={bpp} cams={numCams})")
                     frames = 0
+                    payload_ms_sum = 0.0
+                    save_ms_sum = 0.0
+                    bytes_sum = 0
                     last_t = now
 
-                # save all images with progressive numbering
-                if Image is not None:
-                    for c, data in enumerate(cams):
+                # Optional saving (sampled)
+                if args.save_dir and args.save_every > 0 and (seq % args.save_every == 0):
+                    ts0 = time.perf_counter()
+                    for c, raw in enumerate(bufs):
                         out = os.path.join(args.save_dir, f"cam{c:02d}_f{seq:06d}.png")
-                        save_png_bgru(out, rows, cols, data)
+                        save_png_bgr(out, rows, cols, raw)
+                    ts1 = time.perf_counter()
+                    save_ms_sum += (ts1 - ts0) * 1000.0
                 seq += 1
         except (ConnectionError, BrokenPipeError) as e:
             print("Connessione chiusa:", e)
