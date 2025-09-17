@@ -34,7 +34,7 @@ Wire protocol (LDB0 v1)
 - Transport: TCP (sender = client, receiver = server).
 - Per-frame: 1 fixed-size header + numCams payloads (contiguous images).
 - Header fields are big-endian (network order). Receiver validates magic "LDB0".
-- Images are sent in BGR 3 BPP (no alpha), each of size rows*cols*bpp bytes.
+- Images are sent in BGR 3 BPP, each of size rows*cols*bpp bytes.
 
 Image processing pipeline
 - Color processing method is configurable via LBUG_COLOR_METHOD (e.g.,
@@ -60,8 +60,9 @@ Stats
 - Consumer: aggregates send bandwidth and prints about once per second.
 
 Shutdown
-- Press 'q' to quit. The main thread sets running=false, wakes the sender, joins
-  the thread, then stops/destroys the Ladybug context.
+- The process runs until it is terminated externally (e.g., SIGINT/SIGTERM).
+- On shutdown, the main thread wakes the sender (if needed), joins the thread,
+  then stops and destroys the Ladybug context.
 
 Env vars
 - LBUG_TARGET_IP / LBUG_TARGET_PORT: receiver address (client connects to it).
@@ -131,22 +132,6 @@ static uint16_t    TARGET_PORT = []{
 // Robust send() and TCP connect() helpers (see bottom of file for impls).
 static bool sendAll(int sock, const void* buf, size_t len);
 static int  connectTcp(const char* ip, uint16_t port);
-
-// Non-blocking keypress helper: returns 1 if a key is pending on stdin.
-// Used to detect 'q' to quit without blocking the capture loop.
-static int kbhit(void) {
-    struct termios oldt{}, newt{};
-    int oldf = fcntl(STDIN_FILENO, F_GETFL, 0);
-    tcgetattr(STDIN_FILENO, &oldt);
-    newt = oldt; newt.c_lflag &= ~(ICANON | ECHO);
-    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
-    fcntl(STDIN_FILENO, F_SETFL, oldf | O_NONBLOCK);
-    int ch = getchar();
-    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-    fcntl(STDIN_FILENO, F_SETFL, oldf);
-    if (ch != EOF) { ungetc(ch, stdin); return 1; }
-    return 0;
-}
 
 // Frame header sent once per frame before the image payloads.
 // All integers are big-endian (network byte order).
@@ -252,8 +237,9 @@ int main()
     }
     const uint32_t ds = downsampleFactorFor(colorMethod);
 
-    printf("Streaming %ux%u BGR (3 BPP), first %u cams, to %s:%u; color=%d (ds=%ux); press 'q' to quit\n",
-           OUT_ROWS, OUT_COLS, NUM_SEND_CAMS, TARGET_IP, TARGET_PORT, (int)colorMethod, ds);
+    printf(
+        "Streaming %ux%u BGR (3 BPP), first %u cams, to %s:%u; color=%d (ds=%ux)\n",
+        OUT_ROWS, OUT_COLS, NUM_SEND_CAMS, TARGET_IP, TARGET_PORT, (int)colorMethod, ds);
 
     // Mailbox (latest-wins) buffers:
     // - published: latest completed buffer index (or -1 if none).
@@ -487,13 +473,6 @@ int main()
         }
 
         frame++;
-
-        // Optional: quit on 'q'
-        if (kbhit() && getchar() == 'q') {
-            running.store(false);
-            cv.notify_all();
-            break;
-        }
     }
 
     // Shutdown: stop camera, destroy context, stop sender thread cleanly.
