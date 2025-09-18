@@ -171,7 +171,7 @@ static void bgruBottomSquareToBgrResize(
             const uint32_t sx = xmap[x];                   // source col index
             const size_t sidx = srcRowOff + (size_t)sx * 4; // B,G,R,U
             const size_t didx = dstRowOff + (size_t)x * 3;  // B,G,R
-            // Copy B, G, R (drop U/alpha)
+            // Copy B, G, R 
             dst[didx + 0] = src[sidx + 0];
             dst[didx + 1] = src[sidx + 1];
             dst[didx + 2] = src[sidx + 2];
@@ -230,9 +230,9 @@ int main()
     const char* cmEnv = getenv("LBUG_COLOR_METHOD");
     LadybugColorProcessingMethod colorMethod = parseColorMethod(cmEnv);
     if (ladybugSetColorProcessingMethod(context, colorMethod) != LADYBUG_OK) {
-        printf("ladybugSetColorProcessingMethod failed for '%s', falling back to DOWNSAMPLE4\n",
+        printf("ladybugSetColorProcessingMethod failed for '%s', falling back to DOWNSAMPLE16\n",
                cmEnv ? cmEnv : "(default)");
-        colorMethod = LADYBUG_DOWNSAMPLE4;
+        colorMethod = LADYBUG_DOWNSAMPLE16;
         ladybugSetColorProcessingMethod(context, colorMethod);
     }
     const uint32_t ds = downsampleFactorFor(colorMethod);
