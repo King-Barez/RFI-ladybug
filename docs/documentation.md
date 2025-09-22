@@ -42,7 +42,7 @@ Image processing
 - For each of the first NUM_SEND_CAMS cameras:
   - Convert to BGRU in SDK scratch (downsample applied per method).
   - Crop bottom square: size = min(srcRows, srcCols), bottom-anchored.
-  - Resize to OUT_ROWS x OUT_COLS using precomputed nearest-neighbor maps.
+  - Resize to OUT_ROWS x OUT_COLS (nearest-neighbor maps).
   - Strip alpha to produce BGR (3 BPP).
 
 Configuration (env vars)
@@ -53,7 +53,7 @@ Configuration (env vars)
   DIRECTIONAL_FILTER, WEIGHTED_DIRECTIONAL_FILTER (aliases accepted)
 - LBUG_NUM_CAMS: 1..6 (default 3)
 
-## Build
+## Build (sender)
 
 Release build:
 ```bash
@@ -63,18 +63,47 @@ cmake --build build -j
 
 ## Run
 
-Receiver:
+Receiver (Jetson, Docker + TensorRT)
 ```bash
-python receiver.py --host 0.0.0.0 --port 5000 --save-dir rx_previews --save-every 10
+# 1) Export to TensorRT once (saves to models/yolo11n.engine)
+sudo docker run --rm -it \
+  --runtime nvidia --ipc=host --network host \
+  -v /home/implab/Documents/RFI-ladybug:/work -w /work \
+  ultralytics/ultralytics:latest-jetson-jetpack6 \
+  bash -lc 'yolo export model=yolo11n.pt format=engine device=0 imgsz=640 half=True dynamic=False && \
+            mkdir -p models && mv -f yolo11n.engine models/'
+
+# 2) Start the receiver server
+sudo docker run --rm -it \
+  --runtime nvidia --ipc=host --network host \
+  -v /home/implab/Documents/RFI-ladybug:/work -w /work \
+  ultralytics/ultralytics:latest-jetson-jetpack6 \
+  bash -lc 'pip install -q --no-cache-dir pillow numpy && \
+            python3 receiver.py --host 0.0.0.0 --port 5000 \
+              --yolo-model models/yolo11n.engine --device auto \
+              --conf 0.15 --save-dir rx --save-every 1 --save-annotated'
 ```
 
-Sender (example):
+Receiver (fallback, PyTorch .pt)
 ```bash
-LBUG_TARGET_IP=127.0.0.1 LBUG_TARGET_PORT=5000 LBUG_COLOR_METHOD=DOWNSAMPLE4 LBUG_NUM_CAMS=3 ./build/ladybugRFI
+sudo docker run --rm -it \
+  --runtime nvidia --ipc=host --network host \
+  -v /home/implab/Documents/RFI-ladybug:/work -w /work \
+  ultralytics/ultralytics:latest-jetson-jetpack6 \
+  bash -lc 'pip install -q --no-cache-dir pillow numpy && \
+            python3 receiver.py --host 0.0.0.0 --port 5000 \
+              --yolo-model yolo11n.pt --device auto \
+              --conf 0.15 --save-dir rx --save-every 1 --save-annotated'
 ```
 
-## Notes
+Sender (example)
+```bash
+LBUG_TARGET_IP=<receiver_ip> LBUG_TARGET_PORT=5000 \
+LBUG_COLOR_METHOD=DOWNSAMPLE4 LBUG_NUM_CAMS=3 \
+./build/ladybugRFI
+```
 
-- First-frame diagnostics: the sender prints source/converted/crop/output sizes once on the first frame.
-- Networking: TCP_NODELAY enabled; larger send buffer; robust send with EINTR/EAGAIN handling.
-- If your runtime changes capture resolution, reinitialize the resize maps when a change is detected.
+Notes
+- The provided TensorRT engine is exported with batch=1 (static). The receiver runs YOLO per-camera to be compatible with TRT engines that do not support multi-image batches.
+- Annotated images are written under rx/ as camXX_fNNNNNN_annot.png. Use --save-raw to also write the raw BGR images.
+- Start the receiver before the sender and ensure the sender uses the correct receiver IP (USB-C, Wi‑Fi, or Ethernet).
