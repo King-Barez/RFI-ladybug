@@ -5,10 +5,11 @@ C++ sender that captures from FLIR Ladybug, processes frames with a selectable L
 Features
 - Mailbox triple-buffer (latest-wins) for low latency; frames may be dropped if the consumer lags.
 - Selectable color processing via LBUG_COLOR_METHOD; built-in downsample mapping for DOWNSAMPLE4/16/64 and MONO.
-- Bottom square crop (height = min(rows, cols) of the converted image) then resize to 640x640.
-- Wire format: simple header + N per-camera images, BGR 3 bytes/pixel.
+- Bottom square crop then resize to 640x640; payload format: BGR, 3 bytes/pixel.
 - Python receiver that can save sampled frames and survives reconnects.
 - First-frame-only size diagnostics.
+- NEW: YOLOv11 inference in the receiver (persons only), compatible with NVIDIA Jetson (see guide below).
+- NEW: Per-frame inference timing added to receiver stats (prints “infer=XX.XX ms”).
 
 ## Configurazione (env vars)
 - LBUG_TARGET_IP: receiver IP (default 192.168.0.2)
